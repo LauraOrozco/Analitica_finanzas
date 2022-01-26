@@ -1,0 +1,202 @@
+---
+title: "Analítica en Finanzas - Series de Tiempo"
+output: flexdashboard::flex_dashboard
+df_print: paged
+orientation: columns
+vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(readxl)
+library(tidyverse)
+library(xts)
+library(plotly)
+library(fpp2)
+
+#Cargar archivo
+BD<-read_xlsx("Flex_1.xlsx",sheet = 1)
+
+BD$Date<-as.Date(BD$Date)
+
+#Datos Netflix
+BDN <- select(BD, Date, NFLX.O)
+BDN
+
+#Ordenando por fecha de menor a mayor
+BD_ts<-as.xts(BDN[,-1],order.by = BD$Date)
+
+
+#Series de tiempo
+TSN <- ts(BD_ts)
+TSN
+
+```
+
+
+
+Row {.tabset .tabset-fade}
+-----------------------------------------------------------------------
+
+### Serie de timepo NETFLIX
+
+```{r}
+
+
+library(highcharter)
+library(xts)
+
+#BD_xts<-as.xts(BDN[,-1],order.by = BD$Date)
+
+
+highchart(type = "stock") %>% 
+  hc_add_series(BD_ts[,1],name=names(BD[,1])) 
+
+
+```
+
+
+### Métodos simples
+
+```{r}
+
+grafi1 <- 
+  autoplot(TSN) +
+  autolayer(meanf(TSN, h=20),series="Promedio", PI=FALSE) + 
+  autolayer(naive(TSN, h=20),series="Ingenuo", PI=FALSE) +
+  autolayer(snaive(TSN, h=20),series="Ingenuo Estacional", PI=FALSE) +
+  autolayer(rwf(TSN, h=20, drift = TRUE),series="Deriva", PI=FALSE) +
+  ggtitle("Pronósticos Métodos Simples") +
+  xlab("Año") + ylab("Valor") +
+  guides(colour=guide_legend(title="Pronósticos Métodos Simples"))
+
+ggplotly (grafi1)
+
+```
+
+
+### Diferenciación
+
+```{r}
+
+nd <- ndiffs(TSN)
+
+print(paste("El número apropiado de primeras diferencias es:", nd))
+
+DTSN <- diff(TSN)
+
+
+Box.test(TSN, lag=10, type="Ljung-Box")
+
+
+Box.test(DTSN, lag=10, type="Ljung-Box")
+
+
+Box.test((diff(DTSN)), lag=10, type="Ljung-Box")
+
+
+  
+```
+
+### Check-Residuals Serie
+
+```{r}
+
+
+checkresiduals(TSN)
+
+
+```
+
+### Check-Residuals Serie diferenciada
+
+```{r}
+
+
+checkresiduals(DTSN)
+
+
+```
+
+### ARIMA - ACF - PCF
+
+```{r}
+
+
+ggtsdisplay(DTSN)
+
+
+```
+
+
+### ARIMA
+
+```{r}
+
+
+#ARIMA
+
+fit <- auto.arima(TSN, seasonal=FALSE)
+fit
+
+#Series: TSN 
+#ARIMA(0,1,1) with drift 
+
+#Coefficients:
+#  ma1   drift
+#-0.0993  0.4547
+#s.e.   0.0277  0.2297
+
+#sigma^2 estimated as 81.93:  log likelihood=-4555.34
+#AIC=9116.67   AICc=9116.69   BIC=9132.09
+
+
+
+```
+
+
+### ARIMA2
+
+```{r}
+
+
+#ARIMA
+
+fit %>% forecast(h=10) %>% autoplot(include=80)
+
+
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Autocorrelación (ACF)
+
+```{r}
+
+#La ACF de datos no estacionarios decrece lentamente
+
+grafiAcf <- ggAcf(TSN) +
+  ggtitle("") +
+  xlab("Lag") + ylab("ACF") +
+  guides(colour=guide_legend(title="ACF - Netflix"))
+  
+  
+ggplotly (grafiAcf)
+
+```
+
+### Autocorrelación Parcial (PACF)
+
+```{r}
+
+grafiPacf <- ggPacf(TSN)+
+  ggtitle("") +
+  xlab("Lag") + ylab("PACF") +
+  guides(colour=guide_legend(title="PACF - Netflix"))
+
+ggplotly (grafiPacf)
+
+```
+
