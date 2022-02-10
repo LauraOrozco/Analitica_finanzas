@@ -1,0 +1,376 @@
+---
+title: "Sharpe Ratio"
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    source_code: embed
+---
+
+
+```{r setup, message = FALSE}
+library(flexdashboard)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(shiny)
+library(scales)
+library(purrr)
+library(ggplot2)
+
+
+library(tidyverse)
+library(lubridate)
+library(tibbletime)
+library(quantmod)
+library(PerformanceAnalytics)
+library(scales)
+library(plotly)
+
+```
+
+
+Sidebar {.sidebar}
+=====================================
+```{r}
+symbols <- c("ATVI","ADBE", "GOOG", "AMZN","AAPL")
+
+fluidRow(
+  column(6,
+  
+  selectInput("stock1", "Stock 1",
+              symbols)),
+  column(5,
+  numericInput("w1", "Weight %", 25, min = 1, max = 100))
+)
+fluidRow(
+  column(6,
+  selectInput("stock2", "Stock 2",
+              symbols)),
+  column(5,
+  numericInput("w2", "Weight %", 25, min = 1, max = 100))
+)
+fluidRow(
+  column(6,
+  selectInput("stock3", "Stock 3",
+              symbols)),
+  column(5,
+  numericInput("w3", "Weight %", 20, min = 1, max = 100))
+)
+fluidRow(
+  column(6,
+  selectInput("stock4", "Stock 4",
+              symbols)),
+  column(5,
+  numericInput("w4", "Weight %", 20, min = 1, max = 100))
+)
+fluidRow(
+  column(6,
+  selectInput("stock5", "Stock 5",
+              symbols)),
+  column(5,
+  numericInput("w5", "Weight %", 10, min = 1, max = 100))
+)
+fluidRow(
+  column(7,
+  dateInput("date", "Starting Date", "2013-01-01", format = "yyyy-mm-dd"))
+)
+
+fluidRow(
+  column(7,
+  selectInput("rebalance", "Rebalance",
+              c("Yearly" = "years",
+                "Monthly" = "months",
+                "Weekly" = "weeks"))
+  )
+)
+fluidRow(
+  column(5,
+  numericInput( "rfr", "RFR%", .03, min = 0, max = 1, step = .0002)),
+)
+
+fluidRow(
+  column(5,
+  numericInput("window", "Window", 6, min = 3, max = 24, step = 2))
+)
+
+
+actionButton("go", "Submit")
+```
+```{r}
+# market calculations
+rfr <- eventReactive(input$go, {input$rfr/100})
+
+window <- eventReactive(input$go, {input$window}) 
+market_returns <- eventReactive(input$go, {
+    getSymbols("NDX", src = 'yahoo', 
+            from = input$date, 
+             auto.assign = TRUE, 
+             warnings = FALSE) %>% 
+    map(~Ad(get(.))) %>% 
+    reduce(merge) %>%
+    `colnames<-`("NDX") %>% 
+    to.monthly(indexAt = "lastof", 
+               OHLC = FALSE) %>% 
+    Return.calculate(method = "log") %>% 
+    na.omit()  
+})
+
+market_sharpe <- eventReactive(input$go, {
+  SharpeRatio(market_returns(),
+              Rf = rfr(), 
+              FUN = "StdDev")
+})
+market_rolling_sharpe <- eventReactive(input$go, {
+  rollapply(market_returns(), 
+            window(), 
+            function(x) 
+            SharpeRatio(x, 
+                        Rf = rfr(), 
+                        FUN = "StdDev")) %>% 
+  na.omit()
+})
+```
+```{r}
+# Portfolio calculations
+portfolio_returns <- eventReactive(input$go, {
+  symbols <- c(input$stock1, input$stock2, input$stock3, input$stock4, input$stock5)
+  validate(need(input$w1 + input$w2 + input$w3 + input$w4 + input$w5 == 100, 
+                "The portfolio weights must sum to 100%!"))
+  w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
+  getSymbols(symbols, src = 'yahoo', from = input$date, 
+             auto.assign = TRUE, warnings = FALSE) %>% 
+  map(~Ad(get(.))) %>% 
+  reduce(merge) %>%
+  `colnames<-`(symbols) %>% 
+  to.monthly(indexAt = "lastof", 
+             OHLC = FALSE) %>% 
+  Return.calculate(method = "log") %>% 
+  na.omit() %>% 
+  Return.portfolio(weights = w)
+})
+
+portfolio_rolling_sharpe <- eventReactive(input$go, {
+  rollapply(portfolio_returns(),
+            window(),
+            function(x) SharpeRatio(x, 
+                                    Rf = rfr(), 
+                                    FUN = "StdDev")) %>% 
+  na.omit()
+})
+
+portfolio_sharpe <- eventReactive(input$go, {
+  validate(need(input$w1 + input$w2 + input$w3 + input$w4 + input$w5 == 100, "------"))
+  SharpeRatio(portfolio_returns(),
+              Rf = rfr(), 
+              FUN = "StdDev")
+})
+
+beta_builtin_xts <- eventReactive(input$go, {
+    CAPM.beta(portfolio_returns(), market_returns())
+})
+
+
+asset_returns_long <- eventReactive(input$go, {
+  
+    
+    symbols <- c(input$stock1, input$stock2, input$stock3, input$stock4, input$stock5)
+    w <- c(input$w1/100, input$w2/100, input$w3/100, input$w4/100, input$w5/100)
+    
+    prices <-
+      getSymbols(symbols, src = 'yahoo', from = input$date, 
+             auto.assign = TRUE, warnings = FALSE) %>% 
+      map(~Ad(get(.))) %>% 
+      reduce(merge) %>%
+      `colnames<-`(symbols)
+
+    prices_monthly <- to.monthly(prices,
+                             indexAt = "lastof",
+                             OHLC = FALSE)
+
+    asset_returns_xts <-
+      Return.calculate(prices_monthly,
+                       method = "log") %>%
+      na.omit()
+    
+    portfolio_sd_xts_builtin <-
+      StdDev(asset_returns_xts, weights = w)
+    
+    portfolio_sd_xts_builtin_percent <-
+      
+      round(portfolio_sd_xts_builtin * 100, 2)
+    
+    
+    asset_returns_dplyr_byhand <- prices %>%
+      to.monthly(indexAt = "lastof", OHLC = FALSE) %>%
+      # convert the index to a date
+      data.frame(date = index(.)) %>%
+      # now remove the index because it got converted to row names
+      remove_rownames() %>%
+      gather(asset, prices, -date) %>%
+      group_by(asset) %>%
+      mutate(returns = (log(prices) - log(lag(prices)))) %>%
+      select(-prices) %>%
+      spread(asset, returns) %>%
+      select(date, symbols)
+    
+    asset_returns_dplyr_byhand <-
+      asset_returns_dplyr_byhand %>%
+      na.omit()
+    
+    
+    asset_returns_long <-
+      asset_returns_dplyr_byhand %>%
+      gather(asset, returns, -date) %>%
+      group_by(asset)
+    
+    
+    portfolio_returns_tq_rebalanced_monthly <-
+      asset_returns_long %>%
+      tq_portfolio(assets_col = asset,
+                   returns_col = returns,
+                   weights = w,
+                   col_rename = "returns",
+                   rebalance_on = "months")
+    
+    rfr <- rfr()
+    
+    sharpe_tq <-
+      
+      portfolio_returns_tq_rebalanced_monthly %>%
+      tq_performance(Ra = returns,
+                     performance_fun = SharpeRatio,
+                     Rf = rfr,
+                     FUN = "StdDev") %>%
+      `colnames<-`("sharpe_tq")
+    
+    
+    
+    
+      asset_returns_long %>%
+      summarise(stand_dev = sd(returns),
+                sharpe = mean(returns - rfr)/
+                  sd(returns - rfr))%>%
+      add_row(asset = "Portfolio",
+              stand_dev =
+                portfolio_sd_xts_builtin[1],
+              sharpe =
+                sharpe_tq$sharpe_tq) %>%
+      ggplot(aes(x = stand_dev,
+                 y = sharpe,
+                 color = asset)) +
+      geom_point(size = 2) +
+      geom_text(
+        aes(x =
+              sd(portfolio_returns_tq_rebalanced_monthly$returns),
+            y =
+              sharpe_tq$sharpe_tq + .02,
+            label = "Portfolio")) +
+      ylab("Sharpe Ratio") +
+      xlab("standard deviation") +
+      #ggtitle("Sharpe Ratio versus Standard Deviation") +
+      theme_update(plot.title = element_text(hjust = 0.5))
+})
+
+
+```
+
+
+Sharpe Ratio
+=====================================  
+Row {data-height=800}
+-----------------------------------------------------------------------
+### Rolling Sharpe
+```{r}
+renderHighchart({
+  validate(need(input$go, "Please choose your portfolio assets, weights, rfr, rolling window and start date and click submit."))
+  highchart(type = "stock") %>%
+  hc_title(text = "Rolling Sharpe") %>%
+  hc_add_series(portfolio_rolling_sharpe(), name = "Portfolio", color = "cornflowerblue") %>%
+  hc_add_series(market_rolling_sharpe(), name = "Market", color = "green") %>%
+  hc_navigator(enabled = FALSE) %>% 
+  hc_scrollbar(enabled = FALSE) %>% 
+  hc_exporting(enabled = TRUE) %>% 
+  hc_legend(enabled = TRUE, align = "right", verticalAlign = "middle",
+            layout = "vertical")
+})
+```
+
+
+Row {data-height=200}
+-----------------------------------------------------------------------
+### The Sharpe Ratio of Your Portfolio
+```{r}
+renderValueBox({
+  valueBox(value = tags$p(round(portfolio_sharpe(), 4), 
+                          style = "font-size: 70%;"), 
+           color = "primary")
+})
+```
+
+
+### Sharpe Ratio of NASDAQ-100 in same time period
+```{r}
+renderValueBox({
+  valueBox(value = tags$p(round(market_sharpe(), 4), 
+                          style = "font-size: 70%;"), 
+           color = "primary")
+})
+```
+
+
+### CAPM Beta
+```{r}
+renderValueBox({
+  valueBox(value = tags$p(round(beta_builtin_xts(), 4), 
+                          style = "font-size: 70%;"), 
+           color = "red")
+})
+```
+
+
+Sharpe Ratio 2
+=====================================  
+Row {data-height=800}
+-----------------------------------------------------------------------
+###  Sharpe Ratio versus Standard Deviation
+```{r}
+renderPlot({
+ asset_returns_long()
+})
+```
+
+
+
+
+
+Row {data-height=200}
+-----------------------------------------------------------------------
+### The Sharpe Ratio of Your Portfolio
+```{r}
+renderValueBox({
+  valueBox(value = tags$p(round(portfolio_sharpe(), 4), 
+                          style = "font-size: 70%;"), 
+           color = "primary")
+})
+```
+
+
+### Sharpe Ratio of NASDAQ-100 in same time period
+```{r}
+renderValueBox({
+  valueBox(value = tags$p(round(market_sharpe(), 4), 
+                          style = "font-size: 70%;"), 
+           color = "primary")
+})
+```
+
+
+### CAPM Beta
+```{r}
+renderValueBox({
+  valueBox(value = tags$p(round(beta_builtin_xts(), 4), 
+                          style = "font-size: 70%;"), 
+           color = "red")
+})
+```
